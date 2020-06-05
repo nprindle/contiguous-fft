@@ -15,7 +15,7 @@ module Data.Primitive.Contiguous.FFT
 import qualified Prelude
 
 import Control.Applicative (pure)
-import Control.Monad (when)
+import Control.Monad (when,unless)
 import Control.Monad.Primitive (PrimMonad(..))
 import Control.Monad.ST (runST)
 import Data.Bits (shiftR,shiftL,(.&.),(.|.))
@@ -42,12 +42,12 @@ fft :: forall arr. (Contiguous arr, Element arr (Complex Double))
   -> arr (Complex Double)
 {-# inlinable [1] fft #-}
 fft arr = if arrOK arr
-  then runST $ do {
-      marr <- copyWhole arr
-    ; mfft marr
-    ; Contiguous.unsafeFreeze marr
-  }
+  then runST $ do
+    marr <- copyWhole arr
+    mfft marr
+    Contiguous.unsafeFreeze marr
   else Prelude.error "Data.Primitive.Contiguous.FFT.fft: bad array length"
+
 -- | Inverse fast Fourier transform.
 ifft :: forall arr. (Contiguous arr, Element arr (Complex Double))
   => arr (Complex Double)
@@ -83,46 +83,40 @@ arrOK arr =
 mfft :: forall arr m. (PrimMonad m, Contiguous arr, Element arr (Complex Double))
   => Mutable arr (PrimState m) (Complex Double)
   -> m ()
-mfft mut = do {
-    len <- Contiguous.sizeMutable mut
-  ; let bitReverse !i !j = do {
-          ; if i == len - 1
-              then stage 0 1
-              else do {
-                  when (i < j) $ swap mut i j
-                ; let inner k l = if k <= l
-                        then inner (k `shiftR` 1) (l - k)
-                        else bitReverse (i + 1) (l + k)
-                ; inner (len `shiftR` 1) j
-              }
-        }
-        stage l l1 = if l == (log2 len)
-          then pure ()
-          else do {
-              let !l2 = l1 `shiftL` 1
-                  !e = (negate twoPi) / (intToDouble l2)
-                  flight j !a = if j == l1
-                    then stage (l + 1) l2
-                    else do {
-                        let butterfly i = if i >= len
-                              then flight (j + 1) (a + e)
-                              else do {
-                                  let i1 = i + l1
-                                ; xi1 :+ yi1 <- Contiguous.read mut i1
-                                ; let !c = Prelude.cos a
-                                      !s' = Prelude.sin a
-                                      d = (c*xi1 - s'*yi1) :+ (s'*xi1 + c*yi1)
-                                ; ci <- Contiguous.read mut i
-                                ; Contiguous.write mut i1 (ci - d)
-                                ; Contiguous.write mut i (ci + d)
-                                ; butterfly (i + l2)
-                              }
-                      ; butterfly j
-                    }
-            ; flight 0 0
-         }
-  ; bitReverse 0 0
-}
+mfft mut = do
+  len <- Contiguous.sizeMutable mut
+  let
+    bitReverse !i !j = if i == len - 1
+      then stage 0 1
+      else do
+        when (i < j) $ swap mut i j
+        let inner k l = if k <= l
+              then inner (k `shiftR` 1) (l - k)
+              else bitReverse (i + 1) (l + k)
+        inner (len `shiftR` 1) j
+    stage l l1 = unless (l == (log2 len)) $ do
+      let
+        !l2 = l1 `shiftL` 1
+        !e = (negate twoPi) / (intToDouble l2)
+        flight j !a = if j == l1
+          then stage (l + 1) l2
+          else do
+            let
+              butterfly i = if i >= len
+                then flight (j + 1) (a + e)
+                else do
+                  let i1 = i + l1
+                  xi1 :+ yi1 <- Contiguous.read mut i1
+                  let !c = Prelude.cos a
+                      !s' = Prelude.sin a
+                      d = (c*xi1 - s'*yi1) :+ (s'*xi1 + c*yi1)
+                  ci <- Contiguous.read mut i
+                  Contiguous.write mut i1 (ci - d)
+                  Contiguous.write mut i (ci + d)
+                  butterfly (i + l2)
+            butterfly j
+      flight 0 0
+  bitReverse 0 0
 
 -- wildcard cases should never happen. if they do, really bad things will happen.
 b,s :: Int -> Int
