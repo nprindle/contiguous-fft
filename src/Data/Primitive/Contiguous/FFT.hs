@@ -21,7 +21,7 @@ import Data.Bits (shiftR,shiftL,(.&.))
 import Data.Bool (Bool,(&&))
 import Data.Complex (Complex(..),conjugate)
 import Data.Eq (Eq(..))
-import Data.Function (($),(.))
+import Data.Function (($))
 import Data.Ord (Ord(..))
 import Data.Primitive.Contiguous (Contiguous,Element,Mutable)
 import Data.Semiring (negate,(+),(*),(-))
@@ -53,9 +53,10 @@ ifft :: forall arr. (Contiguous arr, Element arr (Complex Double))
   -> arr (Complex Double)
 {-# inlinable [1] ifft #-}
 ifft arr = if arrOK arr
-  then
-    let lenComplex = intToComplexDouble (Contiguous.size arr)
-    in cmap ((/lenComplex) . conjugate) . fft . cmap conjugate $ arr
+  then runST $ do
+    marr <- copyWhole arr
+    mifft marr
+    Contiguous.unsafeFreeze marr
   else Prelude.error "Data.Primitive.Contiguous.FFT.ifft: bad vector length"
 
 copyWhole :: forall arr m a. (PrimMonad m, Contiguous arr, Element arr a)
@@ -116,6 +117,18 @@ mfft mut = do
       flight 0 0
   bitReverse 0 0
 
+-- | Radix-2 decimation-in-time inverse fast Fourier Transform.
+--   The given array must have a length that is a power of two,
+--   though this property is not checked.
+mifft :: forall arr m. (PrimMonad m, Contiguous arr, Element arr (Complex Double))
+  => Mutable arr (PrimState m) (Complex Double)
+  -> m ()
+mifft mut = do
+  lenComplex <- Prelude.fmap intToComplexDouble $ Contiguous.sizeMutable mut
+  Contiguous.mapMutable conjugate mut
+  mfft mut
+  Contiguous.mapMutable (\x -> conjugate x / lenComplex) mut
+
 swap :: forall arr m x. (PrimMonad m, Contiguous arr, Element arr x)
   => Mutable arr (PrimState m) x
   -> Int
@@ -139,10 +152,3 @@ intToDouble = Prelude.fromIntegral
 intToComplexDouble :: Int -> Complex Double
 {-# inline intToComplexDouble #-}
 intToComplexDouble = Prelude.fromIntegral
-
-cmap :: (Contiguous arr, Element arr (Complex Double))
-  => (Complex Double -> Complex Double)
-  -> arr (Complex Double)
-  -> arr (Complex Double)
-{-# inline cmap #-}
-cmap = Contiguous.map
