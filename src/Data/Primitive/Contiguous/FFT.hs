@@ -16,7 +16,6 @@ import qualified Prelude
 import Control.Applicative (pure)
 import Control.Monad (when,unless)
 import Control.Monad.Primitive (PrimMonad(..))
-import Control.Monad.ST (runST)
 import Data.Bits (shiftR,shiftL,(.&.))
 import Data.Bool (Bool,(&&))
 import Data.Complex (Complex(..),conjugate)
@@ -41,10 +40,10 @@ fft :: forall arr. (Contiguous arr, Element arr (Complex Double))
   -> arr (Complex Double)
 {-# inlinable [1] fft #-}
 fft arr = if arrOK arr
-  then runST $ do
+  then Contiguous.create $ do
     marr <- copyWhole arr
     mfft marr
-    Contiguous.unsafeFreeze marr
+    pure marr
   else Prelude.error "Data.Primitive.Contiguous.FFT.fft: bad array length"
 
 -- | Inverse fast Fourier transform.
@@ -53,21 +52,18 @@ ifft :: forall arr. (Contiguous arr, Element arr (Complex Double))
   -> arr (Complex Double)
 {-# inlinable [1] ifft #-}
 ifft arr = if arrOK arr
-  then runST $ do
+  then Contiguous.create $ do
     marr <- copyWhole arr
     mifft marr
-    Contiguous.unsafeFreeze marr
+    pure marr
   else Prelude.error "Data.Primitive.Contiguous.FFT.ifft: bad vector length"
 
 copyWhole :: forall arr m a. (PrimMonad m, Contiguous arr, Element arr a)
   => arr a
   -> m (Mutable arr (PrimState m) a)
 {-# inline copyWhole #-}
-copyWhole arr = do
-  let len = Contiguous.size arr
-  marr <- Contiguous.new len
-  Contiguous.copy marr 0 arr 0 len
-  pure marr
+copyWhole arr = Contiguous.thaw arr 0 len
+  where len = Contiguous.size arr
 
 arrOK :: forall arr a. (Contiguous arr, Element arr a)
   => arr a
@@ -88,7 +84,7 @@ mfft mut = do
     bitReverse !i !j = if i == len - 1
       then stage 0 1
       else do
-        when (i < j) $ swap mut i j
+        when (i < j) $ Contiguous.swap mut i j
         let inner k l = if k <= l
               then inner (k `shiftR` 1) (l - k)
               else bitReverse (i + 1) (l + k)
@@ -128,18 +124,6 @@ mifft mut = do
   Contiguous.mapMutable conjugate mut
   mfft mut
   Contiguous.mapMutable (\x -> conjugate x / lenComplex) mut
-
-swap :: forall arr m x. (PrimMonad m, Contiguous arr, Element arr x)
-  => Mutable arr (PrimState m) x
-  -> Int
-  -> Int
-  -> m ()
-{-# inline swap #-}
-swap mut i j = do
-  atI <- Contiguous.read mut i
-  atJ <- Contiguous.read mut j
-  Contiguous.write mut i atJ
-  Contiguous.write mut j atI
 
 twoPi :: Double
 {-# inline twoPi #-}
